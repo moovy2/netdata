@@ -1,0 +1,203 @@
+# yamllint disable rule:line-length
+---
+- id: 'okta-authentication'
+  meta:
+    name: 'Okta SSO'
+    link: 'https://netdata.cloud'
+    categories:
+      - auth
+    icon_filename: 'okta.png'
+  keywords:
+    - sso
+    - okta
+    - okta-sso
+  overview:
+    authentication_description: "Integrate your organization's Okta account with Netdata to better manage your team's access controls to Netdata Cloud."
+    authentication_limitations: ''
+  setup:
+    description: |
+      ### Prerequisites
+      - An Okta account
+      - A Netdata Cloud account
+      - Access to the Space as an **Admin**
+      - Space needs to be on a paid plan
+
+      ### Setting up Okta
+      Steps needed to be done on Okta Admin Portal:
+      1. Click on **Applications** tab and choose to **Browse App Catalogue**
+      2. Find Netdata's preconfigured app for easy setup and click **Add Integration**
+      3. Give the app, that will be in your apps dashboard, the preferred **Application label** and click **Next** to move to the Sign-On options tab
+      4. In the **Sign-On Options** all the values we expect are already filled and no additional data is required
+      5. Click **Done**. You are able to go back and edit any fields later if need be
+      6. Go to the **Assignments** tab and enter the People or Group assignments as per your organization’s policies
+
+      ### Netdata Configuration Steps
+      1. Click on the Space settings cog (located above your profile icon)
+      2. Click on the **User Management** section and access **Authentication and Authorization** tab.
+      3. On the Okta SSO card, click on **Configure**
+      4. Fill in the [required credentials](https://developer.okta.com/docs/guides/find-your-app-credentials/main/), you get them from **Okta Admin Portal**:
+          - **Issuer URL** you can get it from your profile icon on top, e.g. `https://company-name.okta.com`
+          - **Client ID** you can get it from **General** tab on application you configured on Okta
+          - **Client Secret** you can get it from **General** tab on application you configured on Okta
+
+      ### Supported features
+      * SP-initiated SSO (Single Sign-On)
+      * IdP-initiated SSO
+
+      ### SP-initiated SSO
+
+      If you start your authentication flow from Netdata sign-in page please check [these steps](/docs/netdata-cloud/authentication-and-authorization/enterprise-sso-authentication.md).
+
+- id: 'oidc-authentication'
+  meta:
+    name: 'OIDC'
+    link: 'https://netdata.cloud'
+    categories:
+      - auth
+    icon_filename: 'openid.svg'
+  keywords:
+    - sso
+    - oidc
+  overview:
+    authentication_description: "Integrate your organization's Authorization Servers with Netdata to better manage your team's access controls to Netdata Cloud."
+    authentication_limitations: ''
+  setup:
+    description: |
+      ### Prerequisites
+      - Authorization Server with OIDC protocol supported
+      - A Netdata Cloud account
+      - Access to the Space as an **Admin**
+      - Space needs to be on a paid plan
+
+      ### Setting up Authorization Server
+      Your server should follow the [full specification for OIDC](https://openid.net/specs/openid-connect-core-1_0.html).
+      In order to integrate your Authorization Server with Netdata the creation of a client is required. Clients are applications and services that can request authentication of a user.
+      The access settings for your client are the following:
+
+      | field                    | value                                                 |
+      | :--                      | :--                                                   |
+      | Root URL                 | `https://app.netdata.cloud/``                           |
+      | Home/Initiate login URL  | `https://app.netdata.cloud/api/v2/auth/account/auth-server?iss={your-server-issuer-url}&redirect_uri=https://app.netdata.cloud/sign-in&register_uri=https://app.netdata.cloud/sign-up/verify`  |
+      | Redirect URL             | `https://app.netdata.cloud/api/v2/auth/account/auth-server/callback`  |
+
+      ### Netdata Configuration Steps
+      1. Click on the Space settings cog (located above your profile icon)
+      2. Click on the **User Management** section and access **Authentication and Authorization** tab.
+      3. On the OIDC card, click on **Configure**
+      4. Fill in the required credentials:
+          - **Issuer URL** the Authorization Server Issuer URL, e.g. `https://my-auth-server.com/`
+          - **Client ID** the Client ID from the created client
+          - **Client Secret** the Client Secret from the created client
+          - **Authorization URL** the Authorization Server authorization URL, e.g. `https://my-auth-server.com/openid-connect/auth`
+          - **Token URL** the Authorization Server token URL, e.g. `https://my-auth-server.com/openid-connect/token`
+          - **User URL** the Authorization Server user info URL, e.g. `https://my-auth-server.com/openid-connect/userinfo`
+
+      ### Supported features
+      * SP-initiated SSO (Single Sign-On)
+      * IdP-initiated SSO
+
+      ### SP-initiated SSO
+
+      If you start your authentication flow from Netdata sign-in page please check [these steps](/docs/netdata-cloud/authentication-and-authorization/enterprise-sso-authentication.md).
+
+
+      ### Reference
+      https://openid.net/developers/how-connect-works/
+
+- id: 'scim'
+  meta:
+    name: 'SCIM'
+    link: 'https://netdata.cloud'
+    categories:
+      - auth
+    icon_filename: 'scim.svg'
+  keywords:
+    - scim
+    - identity-management
+  overview:
+    authentication_description: "The System for Cross-domain Identity Management (SCIM) specification is designed to simplify the management of user identities in cloud-based applications and services."
+    authentication_limitations: ''
+  setup:
+    description: |
+      ### Prerequisites
+      - A Netdata Cloud account
+      - Admin access to the Space
+      - The Space must be on a paid plan
+      - OIDC/SSO integration must already be enabled in one of your Spaces
+
+      ### Supported Features
+      This integration adheres to SCIM v2 specifications. Supported features include:
+
+      - User Resource Management (urn:ietf:params:scim:schemas:core:2.0:User)
+      - Create users
+      - Update user attributes
+      - Deactivate users
+      - Patch operations: Supported
+      - Bulk operations: Not supported
+      - Filtering: Supported (max results: 200)
+      - Password synchronization: Not supported, as we rely on SSO/OIDC authentication
+      - eTag: Not supported
+      - Authentication schemes: OAuth Bearer Token
+
+      ### Netdata Configuration Steps
+      1. Click on the Space settings cog (located above your profile icon).
+      2. Click on the **User Management** section and access **Authentication and Authorization** tab.
+      3. In the SCIM card, click on **Activate**.
+      4. Depending on your situation:
+         - If OIDC/SSO integration is already enabled in your Space, click **Activate**.
+         - If you already have a SCIM integration in another Space and want to create a linked integration here, enter the SCIM token from the original integration and click **Activate**.
+      5. If the setup is successful, you will receive two parameters:
+         - **Base URL**: Use this URL as the base URL for your SCIM client.
+         - **Token**: Use this token for Bearer Authentication with your SCIM client.
+
+      ## Client Configuration Steps
+
+      ### Okta
+      If you're configuring SCIM in Okta, and you already have the Token from the previous section, follow these steps:
+
+      1. Go to the **Applications** menu on the left-hand panel and select the **Netdata** application.
+      2. In the **Netdata** application, navigate to the **Provisioning** tab.
+      3. Click on **Configure API Integration** and check the box for **Enable API Integration**.
+      4. Enter the Token (obtained in the *Netdata Configuration Steps* section) into the **API Token** field, then click **Test API Credentials** to ensure the connection is successful.
+      5. If the test is successful, click **Save** to apply the configuration.
+
+      ## Troubleshoot
+
+      ### Rotating the SCIM Token
+      You can rotate the token provided during SCIM integration setup if needed.
+
+      Steps to rotate the token:
+      1. Click on the Space settings cog (located above your profile icon).
+      2. Click on the **User Management** section and access **Authentication and Authorization** tab.
+      3. In the already configured SCIM card, click **Configure**.
+      4. Click **Regenerate Token**.
+      5. If successful, you will receive a new token for Bearer Authentication with your SCIM client.
+
+      ### User Keying Between SCIM and OIDC
+      Our SCIM (System for Cross-domain Identity Management) integration utilizes OIDC (OpenID Connect) to authenticate users.
+      To ensure users are correctly identified and authenticated between SCIM and OIDC, we use the following mapping:
+
+      - SCIM externalID ↔ OIDC sub
+
+      This mapping ensures that the identity of users remains consistent and secure across both systems.
+
+      **Important**: Ensure that your OIDC and SCIM systems follow this mapping strictly.
+      The externalID in SCIM must correspond to the subfield in OIDC. Any deviation from this mapping may result
+      in incorrect user identification and authentication failures.
+
+      ## FAQ
+
+      ### Why aren’t users automatically added to Netdata spaces when they’re created through SCIM?
+
+      Currently, our SCIM server supports only the User resource. We plan to add support for the Group resource in the future.
+
+      In a Netdata space, users can belong to multiple rooms and have different roles (e.g., admin, manager). Additionally, the same organization may have multiple spaces.
+
+      As we don't yet support groups, when a user is created through SCIM, we don’t have a way to determine which spaces, rooms, and roles the user should be assigned to.
+
+      Once we implement support for the Group resource, admins will be able to map SCIM groups to Netdata memberships, so this assignment will be done automatically.
+
+      Until then, SCIM can only be used to grant or block access to Netdata for users in your organization. After a user is created, it is up to the Netdata administrator to manually invite them to spaces, rooms and assign roles.
+
+      ### Reference
+      [SCIM Specification](https://scim.org)

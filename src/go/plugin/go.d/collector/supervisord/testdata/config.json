@@ -1,0 +1,13 @@
+{
+  "vnode": "ok",
+  "update_every": 123,
+  "url": "ok",
+  "timeout": 123.123,
+  "not_follow_redirects": true,
+  "proxy_url": "ok",
+  "tls_ca": "ok",
+  "tls_cert": "ok",
+  "tls_key": "ok",
+  "tls_skip_verify": true,
+  "force_http2": true
+}

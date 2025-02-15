@@ -8,31 +8,29 @@ NON_INTERACTIVE=0
 DONT_WAIT=0
 
 declare -a package_tree=(
+  bison
+  cmake
+  curl
+  elfutils-libelf-devel
+  flex
   gcc
   gcc-c++
-  make
-  autoconf
-  autoconf-archive
-  autogen
-  automake
+  git
+  gzip
+  json-c-devel
   libatomic
-  libtool
+  libmnl-devel
+  libuuid-devel
+  libuv-devel
+  libyaml-devel
+  lz4-devel
+  make
+  openssl-devel
   pkgconfig
-  cmake
-  nmap-ncat
+  python3
+  systemd-devel
   tar
   zlib-devel
-  libuuid-devel
-  libmnl-devel
-  json-c-devel
-  libuv-devel
-  lz4-devel
-  openssl-devel
-  python3
-  elfutils-libelf-devel
-  git
-  curl
-  gzip
 )
 
 prompt() {

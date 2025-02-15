@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # -----------------------------------------------------------------------------
@@ -32,9 +32,6 @@ cp -va /netdata /usr/src/netdata
 chown -R root:root /usr/src/netdata
 
 cd /usr/src/netdata/packaging/makeself || exit 1
-
-git clean -dxf
-git submodule foreach --recursive git clean -dxf
 
 cat >&2 << EOF
 This program will create a self-extracting shell package containing

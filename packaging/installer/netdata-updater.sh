@@ -1,5 +1,6 @@
 #!/bin/sh
-
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
 # Netdata updater utility
 #
 # Variables needed by script:
@@ -20,19 +21,21 @@
 #
 #  - TMPDIR (set to a usable temporary directory)
 #  - NETDATA_NIGHTLIES_BASEURL (set the base url for downloading the dist tarball)
-#
-# Copyright: 2018-2020 Netdata Inc.
-# SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Author: Paweł Krupa <paulfantom@gmail.com>
-# Author: Pavlos Emm. Katsoulakis <paul@netdata.cloud>
-# Author: Austin S. Hemmelgarn <austin@netdata.cloud>
 
-# Next unused error code: U001B
+# Next unused error code: U001D
 
 set -e
 
 PACKAGES_SCRIPT="https://raw.githubusercontent.com/netdata/netdata/master/packaging/installer/install-required-packages.sh"
+
+NETDATA_STABLE_BASE_URL="${NETDATA_BASE_URL:-https://github.com/netdata/netdata/releases}"
+NETDATA_NIGHTLY_BASE_URL="${NETDATA_BASE_URL:-https://github.com/netdata/netdata-nightlies/releases}"
+NETDATA_DEFAULT_ACCEPT_MAJOR_VERSIONS="1 2"
+
+# Following variables are intended to be overridden by the updater config file.
+NETDATA_UPDATER_JITTER=3600
+NETDATA_NO_SYSTEMD_JOURNAL=0
+NETDATA_ACCEPT_MAJOR_VERSIONS=''
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 
@@ -85,24 +88,69 @@ exit_reason() {
     EXIT_REASON="${1}"
     EXIT_CODE="${2}"
     if [ -n "${NETDATA_PROPAGATE_WARNINGS}" ]; then
-      export EXIT_REASON
-      export EXIT_CODE
-      export NETDATA_WARNINGS
+      if [ -n "${NETDATA_SCRIPT_STATUS_PATH}" ]; then
+        {
+          echo "EXIT_REASON=\"${EXIT_REASON}\""
+          echo "EXIT_CODE=\"${EXIT_CODE}\""
+          echo "NETDATA_WARNINGS=\"${NETDATA_WARNINGS}\""
+        } >> "${NETDATA_SCRIPT_STATUS_PATH}"
+      else
+        export EXIT_REASON
+        export EXIT_CODE
+        export NETDATA_WARNINGS
+      fi
     fi
   fi
 }
 
-issystemd() {
-  # if the directory /lib/systemd/system OR /usr/lib/systemd/system (SLES 12.x) does not exit, it is not systemd
-  if [ ! -d /lib/systemd/system ] && [ ! -d /usr/lib/systemd/system ]; then
-    return 1
-  fi
+is_integer () {
+  case "${1#[+-]}" in
+    *[!0123456789]*) return 1 ;;
+    '')              return 1 ;;
+    *)               return 0 ;;
+  esac
+}
 
+safe_pidof() {
+  pidof_cmd="$(command -v pidof 2> /dev/null)"
+  if [ -n "${pidof_cmd}" ]; then
+    ${pidof_cmd} "${@}"
+    return $?
+  else
+    ps -acxo pid,comm |
+      sed "s/^ *//g" |
+      grep netdata |
+      cut -d ' ' -f 1
+    return $?
+  fi
+}
+
+issystemd() {
   # if there is no systemctl command, it is not systemd
   systemctl=$(command -v systemctl 2> /dev/null)
   if [ -z "${systemctl}" ] || [ ! -x "${systemctl}" ]; then
     return 1
   fi
+
+  # Check the output of systemctl is-system-running.
+  # If this reports 'offline', it’s not systemd. If it reports 'unknown'
+  # or nothing at all (which indicates the command is not supported), it
+  # may or may not be systemd, so continue to other checks. If it reports
+  # anything else, it is systemd.
+  #
+  # This may return a non-zero exit status in cases when it actually
+  # succeeded for our purposes (notably, if the state is `degraded`),
+  # so we need to toggle set -e off here.
+  set +e
+  systemd_state="$(systemctl is-system-running)"
+  set -e
+
+  case "${systemd_state}" in
+    offline) return 1 ;;
+    unknown) : ;;
+    "") : ;;
+    *) return 0 ;;
+  esac
 
   # if pid 1 is systemd, it is systemd
   [ "$(basename "$(readlink /proc/1/exe)" 2> /dev/null)" = "systemd" ] && return 0
@@ -122,6 +170,51 @@ issystemd() {
 
   # else, it is not systemd
   return 1
+}
+
+systemd_unit_exists() {
+  if systemctl list-unit-files "${1}" 2>&1 | tail -n 1 | grep -qv '^0 '; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# shellcheck disable=SC2009
+running_under_anacron() {
+    pid="${1:-$$}"
+    iter="${2:-0}"
+
+    [ "${iter}" -gt 50 ] && return 1
+
+    if [ "$(uname -s)" = "Linux" ] && [ -r "/proc/${pid}/stat" ]; then
+        ppid="$(cut -f 4 -d ' ' "/proc/${pid}/stat")"
+        if [ -n "${ppid}" ]; then
+            # The below case accounts for the hidepid mount option for procfs, as well as setups with LSM
+            [ ! -r "/proc/${ppid}/comm" ] && return 1
+
+            [ "${ppid}" -eq "${pid}" ] && return 1
+
+            grep -q anacron "/proc/${ppid}/comm" && return 0
+
+            running_under_anacron "${ppid}" "$((iter + 1))"
+
+            return "$?"
+        fi
+    else
+        ppid="$(ps -o pid= -o ppid= 2>/dev/null | grep -e "^ *${pid}" | xargs | cut -f 2 -d ' ')"
+        if [ -n "${ppid}" ]; then
+            [ "${ppid}" -eq "${pid}" ] && return 1
+
+            ps -o pid= -o command= 2>/dev/null | grep -e "^ *${ppid}" | grep -q anacron && return 0
+
+            running_under_anacron "${ppid}" "$((iter + 1))"
+
+            return "$?"
+        fi
+    fi
+
+    return 1
 }
 
 _get_intervaldir() {
@@ -145,6 +238,38 @@ _get_scheduler_type() {
     echo 'crontab'
   else
     echo 'none'
+  fi
+}
+
+confirm() {
+  prompt="${1} [y/n]"
+
+  while true; do
+    echo "${prompt}"
+    read -r yn
+
+    case "$yn" in
+      [Yy]*) return 0;;
+      [Nn]*) return 1;;
+      *) echo "Please answer yes or no.";;
+    esac
+  done
+}
+
+warn_major_update() {
+  nmv_suffix="New major versions generally involve breaking changes, and may not work in the same way as older versions."
+
+  if [ "${INTERACTIVE}" -eq 0 ]; then
+    warning "Would update to a new major version of Netdata. ${nmv_suffix}"
+    warning "To install the new major version anyway, either run the updater interactively, or include the new major version number in the NETDATA_ACCEPT_MAJOR_VERSIONS variable in ${UPDATER_CONFIG_PATH}."
+    fatal "Aborting update to new major version to avoid breaking things." U001B
+  else
+    warning "This update will install a new major version of Netdata. ${nmv_suffix}"
+    if confirm "Are you sure you want to update to a new major version of Netdata?"; then
+      notice "User accepted update to new major version of Netdata."
+    else
+      fatal "Aborting update to new major version at user request." U001C
+    fi
   fi
 }
 
@@ -190,11 +315,17 @@ enable_netdata_updater() {
   case "${updater_type}" in
     "systemd")
       if issystemd; then
-        systemctl enable netdata-updater.timer
+        if systemd_unit_exists netdata-updater.timer; then
+          systemctl enable netdata-updater.timer
+          systemctl start netdata-updater.timer
 
-        info "Auto-updating has been ENABLED using a systemd timer unit.\n"
-        info "If the update process fails, the failure will be logged to the systemd journal just like a regular service failure."
-        info "Successful updates should produce empty logs."
+          info "Auto-updating has been ENABLED using a systemd timer unit.\n"
+          info "If the update process fails, the failure will be logged to the systemd journal just like a regular service failure."
+          info "Successful updates should produce empty logs."
+        else
+          error "Systemd-based auto-update scheduling requested, but the required timer unit does not exist. Auto-updates have NOT been enabled."
+          return 1
+        fi
       else
         error "Systemd-based auto-update scheduling requested, but this does not appear to be a systemd system. Auto-updates have NOT been enabled."
         return 1
@@ -214,9 +345,8 @@ enable_netdata_updater() {
       ;;
     "crontab")
       if [ -d "/etc/cron.d" ]; then
-        cat > "/etc/cron.d/netdata-updater" <<-EOF
-	2 57 * * * root ${NETDATA_PREFIX}/netdata-updater.sh
-	EOF
+        [ -f "/etc/cron.d/netdata-updater" ] && rm -f "/etc/cron.d/netdata-updater"
+        install -p -m 0644 -o 0 -g 0 "${NETDATA_PREFIX}/usr/lib/system/cron/netdata-updater-daily" "/etc/cron.d/netdata-updater-daily"
 
         info "Auto-updating has been ENABLED through cron, using a crontab at /etc/cron.d/netdata-updater\n"
         info "If the update process fails and you have email notifications set up correctly for cron on this system, you should receive an email notification of the failure."
@@ -235,8 +365,9 @@ enable_netdata_updater() {
 }
 
 disable_netdata_updater() {
-  if issystemd && ( systemctl list-units --full -all | grep -Fq "netdata-updater.timer" ) ; then
+  if issystemd && systemd_unit_exists "netdata-updater.timer" ; then
     systemctl disable netdata-updater.timer
+    systemctl stop netdata-updater.timer
   fi
 
   if [ -d /etc/cron.daily ]; then
@@ -251,11 +382,97 @@ disable_netdata_updater() {
 
   if [ -d /etc/cron.d ]; then
     rm -f /etc/cron.d/netdata-updater
+    rm -f /etc/cron.d/netdata-updater-daily
   fi
 
   info "Auto-updates have been DISABLED."
 
   return 0
+}
+
+auto_update_status() {
+  case "$(_get_scheduler_type)" in
+    systemd) info "The default auto-update scheduling method for this system is: systemd timer units" ;;
+    crontab) info "The default auto-update scheduling method for this system is: drop-in crontab" ;;
+    interval) info "The default auto-update scheduling method for this system is: drop-in periodic script" ;;
+    *) info "No recognized auto-update scheduling method found" ; return ;;
+  esac
+
+  duplicate=""
+  enabled=""
+
+  if issystemd; then
+    if systemd_unit_exists "netdata-updater.timer"; then
+      if systemctl is-enabled netdata-updater.timer; then
+        info "Auto-updates using a systemd timer unit are ENABLED"
+        enabled="systemd"
+      else
+        info "Auto-updates using a systemd timer unit are DISABLED"
+      fi
+    else
+      info "Auto-updates using a systemd timer unit are NOT SUPPORTED due to: Required unit files not installed"
+    fi
+  else
+    info "Auto-updates using a systemd timer unit are NOT SUPPORTED due to: Systemd not present"
+  fi
+
+  interval_found=""
+
+  if [ -d /etc/cron.daily ]; then
+    interval_found="1"
+
+    if [ -x /etc/cron.daily/netdata-updater.sh ] || [ -x /etc/cron.daily/netdata-updater ]; then
+      info "Auto-updates using a drop-in periodic script in /etc/cron.daily are ENABLED"
+
+      if [ -n "${enabled}" ]; then
+        duplicate="1"
+      else
+        enabled="cron.daily"
+      fi
+    else
+      info "Auto-updates using a drop-in periodic script in /etc/cron.daily are DISABLED"
+    fi
+  else
+    info "Auto-updates using a drop-in periodic script in /etc/cron.daily are NOT SUPPORTED: due to: Directory does not exist"
+  fi
+
+  if [ -d /etc/periodic/daily ]; then
+    if [ -x /etc/periodic/daily/netdata-updater.sh ] || [ -x /etc/periodic/daily/netdata-updater ]; then
+      info "Auto-updates using a drop-in periodic script in /etc/periodic/daily are ENABLED"
+
+      if [ -n "${enabled}" ]; then
+        duplicate="1"
+      else
+        enabled="periodic/daily"
+      fi
+    else
+      if [ -z "${interval_found}" ]; then
+        info "Auto-updates using a drop-in periodic script in /etc/periodic/daily are DISABLED"
+      fi
+    fi
+  elif [ -z "${interval_found}" ]; then
+    info "Auto-updates using a drop-in periodic script in /etc/periodic/daily are NOT SUPPORTED due to: Directory does not exist"
+  fi
+
+  if [ -d /etc/cron.d ]; then
+    if [ -f /etc/cron.d/netdata-updater ] || [ -f /etc/cron.d/netdata-updater-daily ]; then
+      info "Auto-updates using a drop-in crontab are ENABLED"
+
+      if [ -n "${enabled}" ]; then
+        duplicate="1"
+      else
+        enabled="cron.d"
+      fi
+    else
+      info "Auto-updates using a drop-in crontab are DISABLED"
+    fi
+  else
+    info "Auto-updates using a drop-in crontab are NOT SUPPORTED due to: Directory does not exist"
+  fi
+
+  if [ -n "${duplicate}" ]; then
+    warning "More than one method of auto-updates is enabled! Please disable and re-enable auto-updates to correct this."
+  fi
 }
 
 str_in_list() {
@@ -306,39 +523,76 @@ _cannot_use_tmpdir() {
   return "${ret}"
 }
 
-create_tmp_directory() {
+create_exec_tmp_directory() {
   if [ -n "${NETDATA_TMPDIR_PATH}" ]; then
     echo "${NETDATA_TMPDIR_PATH}"
-  else
-    if [ -z "${NETDATA_TMPDIR}" ] || _cannot_use_tmpdir "${NETDATA_TMPDIR}" ; then
-      if [ -z "${TMPDIR}" ] || _cannot_use_tmpdir "${TMPDIR}" ; then
-        if _cannot_use_tmpdir /tmp ; then
-          if _cannot_use_tmpdir "${PWD}" ; then
-            fatal "Unable to find a usable temporary directory. Please set \$TMPDIR to a path that is both writable and allows execution of files and try again." U0003
-          else
-            TMPDIR="${PWD}"
-          fi
-        else
-          TMPDIR="/tmp"
-        fi
-      fi
-    else
-      TMPDIR="${NETDATA_TMPDIR}"
-    fi
+    return
+  fi
 
-    mktemp -d -t netdata-updater-XXXXXXXXXX
+  root_dir=""
+
+  if [ -n "${NETDATA_TMPDIR}" ] && ! _cannot_use_tmpdir "${NETDATA_TMPDIR}"; then
+    root_dir="${NETDATA_TMPDIR}"
+  elif [ -n "${TMPDIR}" ] && ! _cannot_use_tmpdir "${TMPDIR}"; then
+    root_dir="${TMPDIR}"
+  elif ! _cannot_use_tmpdir /tmp; then
+    root_dir="/tmp"
+  elif ! _cannot_use_tmpdir "${PWD}"; then
+    root_dir="${PWD}"
+  else
+    fatal "Unable to find a usable temporary directory. Please set \$TMPDIR to a path that is both writable and allows execution of files and try again." U0003
+  fi
+
+  TMPDIR="${root_dir}"
+
+  mktemp -d -p "${root_dir}" -t netdata-updater-XXXXXXXXXX
+}
+
+check_for_curl() {
+  if [ -z "${curl}" ]; then
+    curl="$(PATH="${PATH}:/opt/netdata/bin" command -v curl 2>/dev/null && true)"
   fi
 }
 
 _safe_download() {
   url="${1}"
   dest="${2}"
-  if command -v curl > /dev/null 2>&1; then
-    curl -sSL --connect-timeout 10 --retry 3 "${url}" > "${dest}"
-    return $?
-  elif command -v wget > /dev/null 2>&1; then
-    wget -T 15 -O - "${url}" > "${dest}"
-    return $?
+  succeeded=0
+  checked=0
+
+  if echo "${url}" | grep -Eq "^file:///"; then
+    run cp "${url#file://}" "${dest}" || return 1
+    return 0
+  fi
+
+  check_for_curl
+
+  if [ -n "${curl}" ]; then
+    checked=1
+
+    if "${curl}" -fsSL --connect-timeout 10 --retry 3 "${url}" > "${dest}"; then
+      succeeded=1
+    else
+      rm -f "${dest}"
+    fi
+  fi
+
+  if [ "${succeeded}" -eq 0 ]; then
+    if command -v wget > /dev/null 2>&1; then
+      checked=1
+
+      if wget -T 15 -O - "${url}" > "${dest}"; then
+        succeeded=1
+      else
+        rm -f "${dest}"
+      fi
+    fi
+  fi
+
+  if [ "${succeeded}" -eq 1 ]; then
+    return 0
+  elif [ "${checked}" -eq 1 ]; then
+    return 1
   else
     return 255
   fi
@@ -361,32 +615,74 @@ download() {
 }
 
 get_netdata_latest_tag() {
-  dest="${1}"
-  url="https://github.com/netdata/netdata/releases/latest"
+  url="${1}/latest"
 
-  if command -v curl >/dev/null 2>&1; then
-    tag=$(curl "${url}" -s -L -I -o /dev/null -w '%{url_effective}' | grep -m 1 -o '[^/]*$')
-  elif command -v wget >/dev/null 2>&1; then
-    tag=$(wget --max-redirect=0 "${url}" 2>&1 | grep Location | cut -d ' ' -f2 | grep -m 1 -o '[^/]*$')
-  else
+  check_for_curl
+
+  if [ -n "${curl}" ]; then
+    tag=$("${curl}" "${url}" -s -L -I -o /dev/null -w '%{url_effective}')
+  fi
+
+  if [ -z "${tag}" ]; then
+    if command -v wget >/dev/null 2>&1; then
+      tag=$(wget -S -O /dev/null "${url}" 2>&1 | grep Location)
+    fi
+  fi
+
+  if [ -z "${tag}" ]; then
     fatal "I need curl or wget to proceed, but neither of them are available on this system." U0006
   fi
 
-  echo "${tag}" >"${dest}"
+  tag="$(echo "${tag}" | grep -Eom 1 '[^/]*/?$')"
+
+  # Fallback case for simpler local testing.
+  if echo "${tag}" | grep -Eq 'latest/?$'; then
+    if _safe_download "${url}/latest-version.txt" ./ndupdate-version.txt; then
+      tag="$(cat ./ndupdate-version.txt)"
+
+      if grep -q 'Not Found' ./ndupdate-version.txt; then
+        tag="latest"
+      fi
+
+      rm -f ./ndupdate-version.txt
+    else
+      tag="latest"
+    fi
+  fi
+
+  echo "${tag}"
 }
 
 newer_commit_date() {
   info "Checking if a newer version of the updater script is available."
 
+  ndtmpdir="$(create_exec_tmp_directory)"
+  commit_check_file="${ndtmpdir}/latest-commit.json"
   commit_check_url="https://api.github.com/repos/netdata/netdata/commits?path=packaging%2Finstaller%2Fnetdata-updater.sh&page=1&per_page=1"
-  python_version_check="from __future__ import print_function;import sys,json;data = json.load(sys.stdin);print(data[0]['commit']['committer']['date'] if isinstance(data, list) else '')"
+  python_version_check="
+from __future__ import print_function
+import sys, json
+
+try:
+    data = json.load(sys.stdin)
+except:
+    print('')
+else:
+    print(data[0]['commit']['committer']['date'] if isinstance(data, list) and data else '')
+"
+
+  _safe_download "${commit_check_url}" "${commit_check_file}"
 
   if command -v jq > /dev/null 2>&1; then
-    commit_date="$(_safe_download "${commit_check_url}" /dev/stdout | jq '.[0].commit.committer.date' 2>/dev/null | tr -d '"')"
+    commit_date="$(jq '.[0].commit.committer.date' 2>/dev/null < "${commit_check_file}" | tr -d '"')"
   elif command -v python > /dev/null 2>&1;then
-    commit_date="$(_safe_download "${commit_check_url}" /dev/stdout | python -c "${python_version_check}")"
+    commit_date="$(python -c "${python_version_check}" < "${commit_check_file}")"
   elif command -v python3 > /dev/null 2>&1;then
-    commit_date="$(_safe_download "${commit_check_url}" /dev/stdout | python3 -c "${python_version_check}")"
+    commit_date="$(python3 -c "${python_version_check}" < "${commit_check_file}")"
+  fi
+
+  if [ -z "${NETDATA_TMPDIR_PATH}" ]; then
+    rm -rf "${ndtmpdir}" >&3 2>&3
   fi
 
   if [ -z "${commit_date}" ] ; then
@@ -414,15 +710,19 @@ self_update() {
   if [ -z "${NETDATA_NO_UPDATER_SELF_UPDATE}" ] && newer_commit_date; then
     info "Downloading newest version of updater script."
 
-    ndtmpdir=$(create_tmp_directory)
+    ndtmpdir=$(create_exec_tmp_directory)
     cd "$ndtmpdir" || exit 1
 
     if _safe_download "https://raw.githubusercontent.com/netdata/netdata/master/packaging/installer/netdata-updater.sh" ./netdata-updater.sh; then
       chmod +x ./netdata-updater.sh || exit 1
       export ENVIRONMENT_FILE="${ENVIRONMENT_FILE}"
-      force_update=""
-      [ "$NETDATA_FORCE_UPDATE" = "1" ] && force_update="--force-update"
-      exec ./netdata-updater.sh --not-running-from-cron --no-updater-self-update "$force_update" --tmpdir-path "$(pwd)"
+
+      cmd="./netdata-updater.sh --not-running-from-cron --no-updater-self-update"
+      [ "$NETDATA_FORCE_UPDATE" = "1" ] && cmd="$cmd --force-update"
+      [ "$INTERACTIVE" = "0" ] && cmd="$cmd --non-interactive"
+      cmd="$cmd --tmpdir-path $(pwd)"
+
+      exec $cmd
     else
       error "Failed to download newest version of updater script, continuing with current version."
     fi
@@ -431,7 +731,12 @@ self_update() {
 
 parse_version() {
   r="${1}"
-  if echo "${r}" | grep -q '^v.*'; then
+  if [ "${r}" = "latest" ]; then
+    # If we get ‘latest’ as a version, return the largest possible
+    # version value.
+    printf "99999999999999"
+    return 0
+  elif echo "${r}" | grep -q '^v.*'; then
     # shellcheck disable=SC2001
     # XXX: Need a regex group substitution here.
     r="$(echo "${r}" | sed -e 's/^v\(.*\)/\1/')"
@@ -455,9 +760,9 @@ parse_version() {
 
 get_latest_version() {
   if [ "${RELEASE_CHANNEL}" = "stable" ]; then
-    get_netdata_latest_tag /dev/stdout
+    get_netdata_latest_tag "${NETDATA_STABLE_BASE_URL}"
   else
-    download "$NETDATA_NIGHTLIES_BASEURL/latest-version.txt" /dev/stdout
+    get_netdata_latest_tag "${NETDATA_NIGHTLY_BASE_URL}"
   fi
 }
 
@@ -474,6 +779,7 @@ update_available() {
      info "Force update requested"
      return 0
   fi
+
   basepath="$(dirname "$(dirname "$(dirname "${NETDATA_LIB_DIR}")")")"
   searchpath="${basepath}/bin:${basepath}/sbin:${basepath}/usr/bin:${basepath}/usr/sbin:${PATH}"
   searchpath="${basepath}/netdata/bin:${basepath}/netdata/sbin:${basepath}/netdata/usr/bin:${basepath}/netdata/usr/sbin:${searchpath}"
@@ -503,6 +809,27 @@ update_available() {
     return 1
   else
     info "Update available"
+
+    if [ "${current_version}" -ne 0 ] && [ "${latest_version}" -ne 0 ]; then
+      current_major="$(${ndbinary} -v | cut -f 2 -d ' ' | cut -f 1 -d '.' | tr -d 'v')"
+      latest_major="$(echo "${latest_tag}" | cut -f 1 -d '.' | tr -d 'v')"
+
+      if [ "${current_major}" -ne "${latest_major}" ]; then
+        update_safe=0
+
+        for v in ${NETDATA_ACCEPT_MAJOR_VERSIONS}; do
+          if [ "${latest_major}" -eq "${v}" ]; then
+            update_safe=1
+            break
+          fi
+        done
+
+        if [ "${update_safe}" -eq 0 ]; then
+          warn_major_update
+        fi
+      fi
+    fi
+
     return 0
   fi
 }
@@ -514,19 +841,25 @@ set_tarball_urls() {
     if [ -e /opt/netdata/etc/netdata/.install-type ]; then
       # shellcheck disable=SC1091
       . /opt/netdata/etc/netdata/.install-type
+      [ -z "${PREBUILT_ARCH:-}" ] && PREBUILT_ARCH="$(uname -m)"
       filename="netdata-${PREBUILT_ARCH}-latest.gz.run"
     else
       filename="netdata-x86_64-latest.gz.run"
     fi
   fi
 
-  if [ "$1" = "stable" ]; then
-    latest="$(get_netdata_latest_tag /dev/stdout)"
-    export NETDATA_TARBALL_URL="https://github.com/netdata/netdata/releases/download/$latest/${filename}"
-    export NETDATA_TARBALL_CHECKSUM_URL="https://github.com/netdata/netdata/releases/download/$latest/sha256sums.txt"
+  if [ -n "${NETDATA_OFFLINE_INSTALL_SOURCE}" ]; then
+    path="$(cd "${NETDATA_OFFLINE_INSTALL_SOURCE}" || exit 1; pwd)"
+    export NETDATA_TARBALL_URL="file://${path}/${filename}"
+    export NETDATA_TARBALL_CHECKSUM_URL="file://${path}/sha256sums.txt"
+  elif [ "$1" = "stable" ]; then
+    latest="$(get_netdata_latest_tag "${NETDATA_STABLE_BASE_URL}")"
+    export NETDATA_TARBALL_URL="${NETDATA_STABLE_BASE_URL}/download/$latest/${filename}"
+    export NETDATA_TARBALL_CHECKSUM_URL="${NETDATA_STABLE_BASE_URL}/download/$latest/sha256sums.txt"
   else
-    export NETDATA_TARBALL_URL="$NETDATA_NIGHTLIES_BASEURL/${filename}"
-    export NETDATA_TARBALL_CHECKSUM_URL="$NETDATA_NIGHTLIES_BASEURL/sha256sums.txt"
+    tag="$(get_netdata_latest_tag "${NETDATA_NIGHTLY_BASE_URL}")"
+    export NETDATA_TARBALL_URL="${NETDATA_NIGHTLY_BASE_URL}/download/${tag}/${filename}"
+    export NETDATA_TARBALL_CHECKSUM_URL="${NETDATA_NIGHTLY_BASE_URL}/download/${tag}/sha256sums.txt"
   fi
 }
 
@@ -534,7 +867,7 @@ update_build() {
   [ -z "${logfile}" ] && info "Running on a terminal - (this script also supports running headless from crontab)"
 
   RUN_INSTALLER=0
-  ndtmpdir=$(create_tmp_directory)
+  ndtmpdir=$(create_exec_tmp_directory)
   cd "$ndtmpdir" || fatal "Failed to change current working directory to ${ndtmpdir}" U0016
 
   install_build_dependencies
@@ -602,15 +935,20 @@ update_build() {
     export NETDATA_SAVE_WARNINGS=1
     export NETDATA_PROPAGATE_WARNINGS=1
     export NETDATA_WARNINGS="${NETDATA_WARNINGS}"
+    export NETDATA_SCRIPT_STATUS_PATH="${NETDATA_SCRIPT_STATUS_PATH}"
     # shellcheck disable=SC2086
     if ! ${env} ./netdata-installer.sh ${REINSTALL_OPTIONS} --dont-wait ${do_not_start} >&3 2>&3; then
+      if [ -r "${NETDATA_SCRIPT_STATUS_PATH}" ]; then
+        # shellcheck disable=SC1090
+        . "${NETDATA_SCRIPT_STATUS_PATH}"
+        rm -f "${NETDATA_SCRIPT_STATUS_PATH}"
+      fi
       if [ -n "${EXIT_REASON}" ]; then
         fatal "Failed to rebuild existing netdata install: ${EXIT_REASON}" "U${EXIT_CODE}"
       else
         fatal "Failed to rebuild existing netdata reinstall." UI0000
       fi
     fi
-    eval "${env} ./netdata-installer.sh ${REINSTALL_OPTIONS} --dont-wait ${do_not_start}" >&3 2>&3 || fatal "FAILED TO COMPILE/INSTALL NETDATA" U0009
 
     # We no longer store checksum info here. but leave this so that we clean up all environment files upon next update.
     sed -i '/NETDATA_TARBALL/d' "${ENVIRONMENT_FILE}"
@@ -628,14 +966,15 @@ update_build() {
 }
 
 update_static() {
-  ndtmpdir="$(create_tmp_directory)"
+  ndtmpdir="$(create_exec_tmp_directory)"
   PREVDIR="$(pwd)"
 
   info "Entering ${ndtmpdir}"
   cd "${ndtmpdir}" || fatal "Failed to change current working directory to ${ndtmpdir}" U0019
 
   if update_available; then
-    sysarch="$(uname -m)"
+    sysarch="${PREBUILT_ARCH}"
+    [ -z "$sysarch" ] && sysarch="$(uname -m)"
     download "${NETDATA_TARBALL_CHECKSUM_URL}" "${ndtmpdir}/sha256sum.txt"
     download "${NETDATA_TARBALL_URL}" "${ndtmpdir}/netdata-${sysarch}-latest.gz.run"
     if ! grep "netdata-${sysarch}-latest.gz.run" "${ndtmpdir}/sha256sum.txt" | safe_sha256sum -c - > /dev/null 2>&1; then
@@ -650,7 +989,7 @@ update_static() {
 
     # Do not pass any options other than the accept, for now
     # shellcheck disable=SC2086
-    if sh "${ndtmpdir}/netdata-${sysarch}-latest.gz.run" --accept -- ${REINSTALL_OPTIONS}; then
+    if sh "${ndtmpdir}/netdata-${sysarch}-latest.gz.run" --accept -- ${REINSTALL_OPTIONS} >&3 2>&3; then
       rm -r "${ndtmpdir}"
     else
       info "NOTE: did not remove: ${ndtmpdir}"
@@ -665,6 +1004,15 @@ update_static() {
   fi
   [ -n "${logfile}" ] && rm "${logfile}" && logfile=
   exit 0
+}
+
+get_new_binpkg_major() {
+  case "${pm_cmd}" in
+    apt-get) apt-get --just-print upgrade 2>&1 | grep Inst | grep ' netdata ' | cut -f 3 -d ' ' | tr -d '[]' | cut -f 1 -d '.' ;;
+    yum) yum check-update netdata | grep -E '^netdata ' | awk '{print $2}' | cut -f 1 -d '.' ;;
+    dnf) dnf check-update netdata | grep -E '^netdata ' | awk '{print $2}' | cut -f 1 -d '.' ;;
+    zypper) zypper list-updates | grep '| netdata |' | cut -f 5 -d '|' | tr -d ' ' | cut -f 1 -d '.' ;;
+  esac
 }
 
 update_binpkg() {
@@ -682,16 +1030,16 @@ update_binpkg() {
 
   DISTRO="${ID}"
 
-  supported_compat_names="debian ubuntu centos fedora opensuse"
+  supported_compat_names="debian ubuntu centos fedora opensuse ol amzn"
 
   if str_in_list "${DISTRO}" "${supported_compat_names}"; then
     DISTRO_COMPAT_NAME="${DISTRO}"
   else
     case "${DISTRO}" in
-      opensuse-leap)
+      opensuse-leap|opensuse-tumbleweed)
         DISTRO_COMPAT_NAME="opensuse"
         ;;
-      cloudlinux|almalinux|rocky|rhel)
+      cloudlinux|almalinux|centos-stream|rocky|rhel)
         DISTRO_COMPAT_NAME="centos"
         ;;
       *)
@@ -700,64 +1048,57 @@ update_binpkg() {
     esac
   fi
 
-  if [ "${INTERACTIVE}" = "0" ]; then
-    interactive_opts="-y"
-    env="DEBIAN_FRONTEND=noninteractive"
-  else
-    interactive_opts=""
-    env=""
-  fi
+  interactive_opts=""
+  env=""
 
   case "${DISTRO_COMPAT_NAME}" in
-    debian)
+    debian|ubuntu)
+      if [ "${INTERACTIVE}" = "0" ]; then
+        upgrade_subcmd="-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --only-upgrade install"
+        interactive_opts="-y"
+        env="DEBIAN_FRONTEND=noninteractive"
+      else
+        upgrade_subcmd="--only-upgrade install"
+      fi
       pm_cmd="apt-get"
       repo_subcmd="update"
-      upgrade_cmd="--only-upgrade install"
+      install_subcmd="install"
+      mark_auto_cmd="apt-mark auto"
       pkg_install_opts="${interactive_opts}"
       repo_update_opts="${interactive_opts}"
-      pkg_installed_check="dpkg -s"
+      pkg_installed_check="dpkg-query -s"
       INSTALL_TYPE="binpkg-deb"
       ;;
-    ubuntu)
-      pm_cmd="apt-get"
-      repo_subcmd="update"
-      upgrade_cmd="--only-upgrade install"
-      pkg_install_opts="${interactive_opts}"
-      repo_update_opts="${interactive_opts}"
-      pkg_installed_check="dpkg -s"
-      INSTALL_TYPE="binpkg-deb"
-      ;;
-    centos)
+    centos|fedora|ol|amzn)
+      if [ "${INTERACTIVE}" = "0" ]; then
+        interactive_opts="-y"
+      fi
       if command -v dnf > /dev/null; then
         pm_cmd="dnf"
         repo_subcmd="makecache"
+        mark_auto_cmd="dnf mark remove"
       else
         pm_cmd="yum"
+        mark_auto_cmd="yumdb set reason dep"
       fi
-      upgrade_cmd="upgrade"
-      pkg_install_opts="${interactive_opts}"
-      repo_update_opts="${interactive_opts}"
-      pkg_installed_check="rpm -q"
-      INSTALL_TYPE="binpkg-rpm"
-      ;;
-    fedora)
-      if command -v dnf > /dev/null; then
-        pm_cmd="dnf"
-        repo_subcmd="makecache"
-      else
-        pm_cmd="yum"
-      fi
-      upgrade_cmd="upgrade"
+      upgrade_subcmd="upgrade"
+      install_subcmd="install"
       pkg_install_opts="${interactive_opts}"
       repo_update_opts="${interactive_opts}"
       pkg_installed_check="rpm -q"
       INSTALL_TYPE="binpkg-rpm"
       ;;
     opensuse)
+      if [ "${INTERACTIVE}" = "0" ]; then
+        upgrade_subcmd="--non-interactive update"
+      else
+        upgrade_subcmd="update"
+      fi
       pm_cmd="zypper"
       repo_subcmd="--gpg-auto-import-keys refresh"
-      upgrade_cmd="upgrade"
-      pkg_install_opts="${interactive_opts} --allow-unsigned-rpm"
+      install_subcmd="install"
+      mark_auto_cmd=""
+      pkg_install_opts=""
       repo_update_opts=""
       pkg_installed_check="rpm -q"
       INSTALL_TYPE="binpkg-rpm"
@@ -776,7 +1117,7 @@ update_binpkg() {
   for repopkg in netdata-repo netdata-repo-edge; do
     if ${pkg_installed_check} ${repopkg} > /dev/null 2>&1; then
       # shellcheck disable=SC2086
-      env ${env} ${pm_cmd} ${upgrade_cmd} ${pkg_install_opts} ${repopkg} >&3 2>&3 || fatal "Failed to update Netdata repository config." U000D
+      env ${env} ${pm_cmd} ${upgrade_subcmd} ${pkg_install_opts} ${repopkg} >&3 2>&3 || fatal "Failed to update Netdata repository config." U000D
       # shellcheck disable=SC2086
       if [ -n "${repo_subcmd}" ]; then
         env ${env} ${pm_cmd} ${repo_subcmd} ${repo_update_opts} >&3 2>&3 || fatal "Failed to update repository metadata." U000E
@@ -784,8 +1125,40 @@ update_binpkg() {
     fi
   done
 
+  current_major="$(netdata -v | cut -f 2 -d ' ' | cut -f 1 -d '.' | tr -d 'v')"
+  latest_major="$(get_new_binpkg_major)"
+
+  if [ -n "${latest_major}" ] && [ "${latest_major}" -ne "${current_major}" ]; then
+    update_safe=0
+
+    for v in ${NETDATA_ACCEPT_MAJOR_VERSIONS}; do
+      if [ "${latest_major}" -eq "${v}" ]; then
+        update_safe=1
+        break
+      fi
+    done
+
+    if [ "${update_safe}" -eq 0 ]; then
+      warn_major_update
+    fi
+  fi
+
   # shellcheck disable=SC2086
-  env ${env} ${pm_cmd} ${upgrade_cmd} ${pkg_install_opts} netdata >&3 2>&3 || fatal "Failed to update Netdata package." U000F
+  env ${env} ${pm_cmd} ${upgrade_subcmd} ${pkg_install_opts} netdata >&3 2>&3 || fatal "Failed to update Netdata package." U000F
+
+  if ${pkg_installed_check} systemd > /dev/null 2>&1; then
+    if [ "${NETDATA_NO_SYSTEMD_JOURNAL}" -eq 0 ]; then
+      if ! ${pkg_installed_check} netdata-plugin-systemd-journal > /dev/null 2>&1; then
+        env ${env} ${pm_cmd} ${install_subcmd} ${pkg_install_opts} netdata-plugin-systemd-journal >&3 2>&3
+
+        if [ -n "${mark_auto_cmd}" ]; then
+          # shellcheck disable=SC2086
+          env ${env} ${mark_auto_cmd} netdata-plugin-systemd-journal >&3 2>&3
+        fi
+      fi
+    fi
+  fi
+
   [ -n "${logfile}" ] && rm "${logfile}" && logfile=
   return 0
 }
@@ -793,11 +1166,10 @@ update_binpkg() {
 # Simple function to encapsulate original updater behavior.
 update_legacy() {
   set_tarball_urls "${RELEASE_CHANNEL}" "${IS_NETDATA_STATIC_BINARY}"
-  if [ "${IS_NETDATA_STATIC_BINARY}" = "yes" ]; then
-    update_static && exit 0
-  else
-    update_build && exit 0
-  fi
+  case "${IS_NETDATA_STATIC_BINARY}" in
+    yes) update_static && exit 0 ;;
+    *) update_build && exit 0 ;;
+  esac
 }
 
 logfile=
@@ -805,8 +1177,8 @@ ndtmpdir=
 
 trap cleanup EXIT
 
-if [ -t 2 ]; then
-  # we are running on a terminal
+if [ -t 2 ] || [ "${GITHUB_ACTIONS}" ]; then
+  # we are running on a terminal or under CI
   # open fd 3 and send it to stderr
   exec 3>&2
 else
@@ -849,6 +1221,14 @@ if [ -r "$(dirname "${ENVIRONMENT_FILE}")/.install-type" ]; then
   . "$(dirname "${ENVIRONMENT_FILE}")/.install-type" || fatal "Failed to source $(dirname "${ENVIRONMENT_FILE}")/.install-type" U0015
 fi
 
+UPDATER_CONFIG_PATH="$(dirname "${ENVIRONMENT_FILE}")/netdata-updater.conf"
+if [ -r "${UPDATER_CONFIG_PATH}" ]; then
+  # shellcheck source=/dev/null
+  . "${UPDATER_CONFIG_PATH}"
+fi
+
+[ -z "${NETDATA_ACCEPT_MAJOR_VERSIONS}" ] && NETDATA_ACCEPT_MAJOR_VERSIONS="${NETDATA_DEFAULT_ACCEPT_MAJOR_VERSIONS}"
+
 while [ -n "${1}" ]; do
   case "${1}" in
     --not-running-from-cron) NETDATA_NOT_RUNNING_FROM_CRON=1 ;;
@@ -856,36 +1236,58 @@ while [ -n "${1}" ]; do
     --force-update) NETDATA_FORCE_UPDATE=1 ;;
     --non-interactive) INTERACTIVE=0 ;;
     --interactive) INTERACTIVE=1 ;;
+    --offline-install-source)
+      NETDATA_OFFLINE_INSTALL_SOURCE="${2}"
+      shift 1
+      ;;
     --tmpdir-path)
-        NETDATA_TMPDIR_PATH="${2}"
-        shift 1
-        ;;
+      NETDATA_TMPDIR_PATH="${2}"
+      shift 1
+      ;;
     --enable-auto-updates)
-        enable_netdata_updater "${2}"
-        exit $?
-        ;;
+      enable_netdata_updater "${2}"
+      exit $?
+      ;;
     --disable-auto-updates)
-        disable_netdata_updater
-        exit $?
-        ;;
-    *)
-        fatal "Unrecognized option ${1}" U001A
-        ;;
+      disable_netdata_updater
+      exit $?
+      ;;
+    --auto-update-status)
+      auto_update_status
+      exit 0
+      ;;
+    *) fatal "Unrecognized option ${1}" U001A ;;
   esac
 
   shift 1
 done
 
+if [ -n "${NETDATA_OFFLINE_INSTALL_SOURCE}" ]; then
+  NETDATA_NO_UPDATER_SELF_UPDATE=1
+  NETDATA_UPDATER_JITTER=0
+  NETDATA_FORCE_UPDATE=1
+fi
+
+# If we seem to be running under anacron, act as if we’re not running from cron.
+# This is mostly to disable jitter, which should not be needed when run from anacron.
+if running_under_anacron; then
+  NETDATA_NOT_RUNNING_FROM_CRON="${NETDATA_NOT_RUNNING_FROM_CRON:-1}"
+fi
+
 # Random sleep to alleviate stampede effect of Agents upgrading
 # and disconnecting/reconnecting at the same time (or near to).
 # But only we're not a controlling terminal (tty)
 # Randomly sleep between 1s and 60m
-if [ ! -t 1 ] && [ -z "${NETDATA_NOT_RUNNING_FROM_CRON}" ]; then
-    rnd="$(awk '
+if [ ! -t 1 ] && \
+   [ -z "${GITHUB_ACTIONS}" ] && \
+   [ -z "${NETDATA_NOT_RUNNING_FROM_CRON}" ] && \
+   is_integer "${NETDATA_UPDATER_JITTER}" && \
+   [ "${NETDATA_UPDATER_JITTER}" -gt 1 ]; then
+    rnd="$(awk "
       BEGIN { srand()
-              printf("%d\n", 3600 * rand())
-      }')"
-    sleep $(((rnd % 3600) + 1))
+              printf(\"%d\\n\", ${NETDATA_UPDATER_JITTER} * rand())
+      }")"
+    sleep $(((rnd % NETDATA_UPDATER_JITTER) + 1))
 fi
 
 # We dont expect to find lib dir variable on older installations, so load this path if none found
@@ -893,9 +1295,6 @@ export NETDATA_LIB_DIR="${NETDATA_LIB_DIR:-${NETDATA_PREFIX}/var/lib/netdata}"
 
 # Source the tarball checksum, if not already available from environment (for existing installations with the old logic)
 [ -z "${NETDATA_TARBALL_CHECKSUM}" ] && [ -f "${NETDATA_LIB_DIR}/netdata.tarball.checksum" ] && NETDATA_TARBALL_CHECKSUM="$(cat "${NETDATA_LIB_DIR}/netdata.tarball.checksum")"
-
-# Grab the nightlies baseurl (defaulting to our Google Storage bucket)
-export NETDATA_NIGHTLIES_BASEURL="${NETDATA_NIGHTLIES_BASEURL:-https://storage.googleapis.com/netdata-nightlies}"
 
 if echo "$INSTALL_TYPE" | grep -qv ^binpkg && [ "${INSTALL_UID}" != "$(id -u)" ]; then
   fatal "You are running this script as user with uid $(id -u). We recommend to run this script as root (user with uid 0)" U0011
@@ -915,9 +1314,7 @@ case "${INSTALL_TYPE}" in
       set_tarball_urls "${RELEASE_CHANNEL}" "${IS_NETDATA_STATIC_BINARY}"
       update_static && exit 0
       ;;
-    *binpkg*)
-      update_binpkg && exit 0
-      ;;
+    *binpkg*) update_binpkg && exit 0 ;;
     "") # Fallback case for no `.install-type` file. This just works like the old install type detection.
       validate_environment_file
       update_legacy
@@ -931,10 +1328,6 @@ case "${INSTALL_TYPE}" in
         fatal "This script does not support updating custom installations without valid environment files." U0012
       fi
       ;;
-    oci)
-      fatal "This script does not support updating Netdata inside our official Docker containers, please instead update the container itself." U0013
-      ;;
-    *)
-      fatal "Unrecognized installation type (${INSTALL_TYPE}), unable to update." U0014
-      ;;
+    oci) fatal "This script does not support updating Netdata inside our official Docker containers, please instead update the container itself." U0013 ;;
+    *) fatal "Unrecognized installation type (${INSTALL_TYPE}), unable to update." U0014 ;;
 esac

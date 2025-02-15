@@ -2,13 +2,35 @@
 
 import sys
 
-version = sys.argv[1].split('.')
-suffix = sys.argv[2]
+github_event = sys.argv[1]
+version = sys.argv[2]
 
-REPO = f'netdata/netdata{suffix}'
+REPO = 'netdata/netdata'
 
-MAJOR = ':'.join([REPO, version[0]])
-MINOR = ':'.join([REPO, '.'.join(version[0:2])])
-PATCH = ':'.join([REPO, '.'.join(version[0:3])])
+REPOS = (
+    REPO,
+    f'quay.io/{REPO}',
+    f'ghcr.io/{REPO}',
+)
 
-print(','.join([MAJOR, MINOR, PATCH]))
+match version:
+    case '':
+        tags = (f'{REPO}:test',)
+    case 'nightly':
+        tags = tuple([
+            f'{r}:{t}' for r in REPOS for t in ('edge', 'latest')
+        ])
+    case _:
+        v = f'v{version}'.split('.')
+
+        tags = tuple([
+            f'{r}:{t}' for r in REPOS for t in (
+                v[0],
+                '.'.join(v[0:2]),
+                '.'.join(v[0:3]),
+            )
+        ])
+
+        tags = tags + tuple([f'{r}:stable' for r in REPOS])
+
+print(','.join(tags))

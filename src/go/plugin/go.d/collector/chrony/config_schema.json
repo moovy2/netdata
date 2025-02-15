@@ -1,0 +1,50 @@
+{
+  "jsonSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Chrony collector configuration.",
+    "type": "object",
+    "properties": {
+      "update_every": {
+        "title": "Update every",
+        "description": "Data collection interval, measured in seconds.",
+        "type": "integer",
+        "minimum": 1,
+        "default": 1
+      },
+      "address": {
+        "title": "Address",
+        "description": "The IP address and port where Chrony daemon listens for incoming connections.",
+        "type": "string",
+        "default": "127.0.0.1:323"
+      },
+      "timeout": {
+        "title": "Timeout",
+        "description": "Timeout for establishing a connection and communication (reading and writing) in seconds.",
+        "type": "number",
+        "default": 1
+      },
+      "vnode": {
+        "title": "Vnode",
+        "description": "Associates this data collection job with a [Virtual Node](https://learn.netdata.cloud/docs/netdata-agent/configuration/organize-systems-metrics-and-alerts#virtual-nodes).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "address"
+    ],
+    "patternProperties": {
+      "^name$": {}
+    }
+  },
+  "uiSchema": {
+    "uiOptions": {
+      "fullPage": true
+    },
+    "vnode": {
+      "ui:placeholder": "To use this option, first create a Virtual Node and then reference its name here."
+    },
+    "timeout": {
+      "ui:help": "Accepts decimals for precise control (e.g., type 1.5 for 1.5 seconds)."
+    }
+  }
+}

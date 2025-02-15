@@ -27,38 +27,18 @@ jobs:
     steps:
       - name: Checkout
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Prepare tools
         id: prepare
         run: |
-          sudo apt-get update && sudo apt-get install -y python3-ruamel.yaml
+          sudo apt-get update || true
+          sudo apt-get install -y python3-ruamel.yaml
       - name: Read build matrix
         id: set-matrix
-        shell: python3 {0}
         run: |
-          from ruamel.yaml import YAML
-          import json
-          yaml = YAML(typ='safe')
-          entries = list()
-
-          with open('.github/data/distros.yml') as f:
-              data = yaml.load(f)
-
-          for i, v in enumerate(data['include']):
-              if 'packages' in data['include'][i]:
-                  entries.append({
-                      'distro': data['include'][i]['distro'],
-                      'version': data['include'][i]['version'],
-                      'pkgclouddistro': data['include'][i]['packages']['repo_distro'],
-                      'format': data['include'][i]['packages']['type'],
-                      'base_image': data['include'][i]['base_image'] if 'base_image' in data['include'][i] else data['include'][i]['distro'],
-                      'platform': data['platform_map']['amd64']
-                  })
-
-          entries.sort(key=lambda k: (k['distro'], k['version']))
-          matrix = json.dumps({'include': entries}, sort_keys=True)
-          print('Generated Matrix: ' + matrix)
-          print('::set-output name=matrix::' + matrix)
+          matrix="$(.github/scripts/gen-matrix-repoconfig.py)"
+          echo "Generated matrix: ${matrix}"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
       - name: Failure Notification
         uses: rtCamp/action-slack-notify@v2
         env:
@@ -98,27 +78,40 @@ jobs:
     steps:
       - name: Checkout
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         # Unlike normally, we do not need a deep clone or submodules for this.
       - name: Fetch base image
         id: fetch-images
-        uses: nick-invision/retry@v2
+        uses: nick-invision/retry@v3
         with:
           max_attempts: 3
           retry_wait_seconds: 30
           timeout_seconds: 900
-          command: docker pull --platform ${{ matrix.platform }} ${{ matrix.base_image }}:${{ matrix.version }}
+          command: docker pull --platform ${{ matrix.platform }} ${{ matrix.base_image }}
       - name: Build Packages
         id: build
         shell: bash
         run: |
           docker run --security-opt seccomp=unconfined -e DISABLE_TELEMETRY=1 --platform ${{ matrix.platform }} \
-              -v "$PWD":/netdata ${{ matrix.base_image }}:${{ matrix.version }} \
+              -v "$PWD":/netdata ${{ matrix.base_image }} \
               /netdata/packaging/repoconfig/build-${{ matrix.format }}.sh
+      - name: Upload Packages
+        id: publish
+        if: github.event_name != 'pull_request' && github.repository == 'netdata/netdata'
+        continue-on-error: true
+        shell: bash
+        env:
+          PKG_CLOUD_TOKEN: ${{ secrets.PACKAGE_CLOUD_API_KEY }}
+        run: |
+          printf "Packages to upload:\n%s" "$(ls packaging/repoconfig/artifacts/*.${{ matrix.format }})"
+          for pkgfile in artifacts/*.${{ matrix.format }} ; do
+            .github/scripts/package_cloud_wrapper.sh yank "${REPO_PREFIX}-repoconfig/${{ matrix.pkgclouddistro }}" \
+                "$(basename "${pkgfile}")" || true
+            .github/scripts/package_cloud_wrapper.sh push "${REPO_PREFIX}-repoconfig/${{ matrix.pkgclouddistro }}" "${pkgfile}"
+          done
       - name: SSH setup
         id: ssh-setup
-        if: github.event_name == 'workflow_dispatch'
-        continue-on-error: true
+        if: github.event_name != 'pull_request' && github.repository == 'netdata/netdata'
         uses: shimataro/ssh-key-action@v2
         with:
           key: ${{ secrets.NETDATABOT_PACKAGES_SSH_KEY }}
@@ -127,41 +120,42 @@ jobs:
       - name: Upload to packages.netdata.cloud
         id: package-upload
         continue-on-error: true
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          .github/scripts/package-upload.sh \
-          ${{ matrix.repo_distro }} \
-          ${{ matrix.arch }} \
-          ${{ matrix.format }} \
-          netdata/netdata
-          .github/scripts/package-upload.sh \
-          ${{ matrix.repo_distro }} \
-          ${{ matrix.arch }} \
-          ${{ matrix.format }} \
-          netdata/netdata-edge
-          .github/scripts/package-upload.sh \
-          ${{ matrix.repo_distro }} \
-          ${{ matrix.arch }} \
-          ${{ matrix.format }} \
-          netdata/netdata-repoconfig
-      - name: Upload Packages
-        id: publish
         if: github.event_name != 'pull_request' && github.repository == 'netdata/netdata'
-        shell: bash
-        env:
-          PKG_CLOUD_TOKEN: ${{ secrets.PACKAGE_CLOUD_API_KEY }}
         run: |
-          printf "Packages to upload:\n%s" "$(ls artifacts/*.${{ matrix.format }})"
-          for pkgfile in artifacts/*.${{ matrix.format }} ; do
-            .github/scripts/package_cloud_wrapper.sh yank "${REPO_PREFIX}/${{ matrix.pkgclouddistro }}" \
-                "$(basename "${pkgfile}")" || true
-            .github/scripts/package_cloud_wrapper.sh push "${REPO_PREFIX}/${{ matrix.pkgclouddistro }}" "${pkgfile}"
-            .github/scripts/package_cloud_wrapper.sh yank "${REPO_PREFIX}-edge/${{ matrix.pkgclouddistro }}" \
-                "$(basename "${pkgfile}")" || true
-            .github/scripts/package_cloud_wrapper.sh push "${REPO_PREFIX}-edge/${{ matrix.pkgclouddistro }}" "${pkgfile}"
-            .github/scripts/package_cloud_wrapper.sh yank "${REPO_PREFIX}-repoconfig/${{ matrix.pkgclouddistro }}" \
-                "$(basename "${pkgfile}")" || true
-            .github/scripts/package_cloud_wrapper.sh push "${REPO_PREFIX}-repoconfig/${{ matrix.pkgclouddistro }}" "${pkgfile}"
+          # shellcheck disable=SC2043
+          for arch in ${{ matrix.arches }}; do
+              .github/scripts/package-upload.sh \
+              packages.netdata.cloud \
+              "${{ matrix.pkgclouddistro }}" \
+              "${arch}" \
+              "${{ matrix.format }}" \
+              netdata/netdata-repoconfig \
+              packaging/repoconfig/artifacts
+          done
+      - name: Import GPG Keys
+        id: import-keys
+        if: matrix.format == 'deb' && github.event_name != 'pull_request'
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.NETDATABOT_PACKAGE_SIGNING_KEY }}
+      - name: Sign DEB Packages
+        id: sign-deb
+        if: matrix.format == 'deb' && github.event_name != 'pull_request'
+        shell: bash
+        run: .github/scripts/deb-sign.sh packaging/repoconfig/artifacts ${{ steps.import-keys.outputs.fingerprint }}
+      - name: Upload to packages2.netdata.cloud
+        id: package2-upload
+        if: github.event_name != 'pull_request' && github.repository == 'netdata/netdata'
+        run: |
+          # shellcheck disable=SC2043
+          for arch in ${{ matrix.arches }}; do
+              .github/scripts/package-upload.sh \
+              packages2.netdata.cloud \
+              "${{ matrix.pkgclouddistro }}" \
+              "${arch}" \
+              "${{ matrix.format }}" \
+              netdata/netdata-repoconfig \
+              packaging/repoconfig/artifacts
           done
       - name: Failure Notification
         if: ${{ failure() && github.repository == 'netdata/netdata' }}
@@ -177,7 +171,10 @@ jobs:
               Checkout: ${{ steps.checkout.outcome }}
               Fetch images: ${{ steps.fetch-images.outcome }}
               Build: ${{ steps.build.outcome }}
+              Publish to PackageCloud: ${{ steps.publish.outcome }}
               Import SSH Key: ${{ steps.ssh-setup.outcome }}
               Publish to packages.netdata.cloud: ${{ steps.package-upload.outcome }}
-              Publish to PackageCloud: ${{ steps.publish.outcome }}
+              Import GPG Keys: ${{ steps.import-keys.outcome }}
+              Sign DEB Packages: ${{ steps.sign-deb.outcome }}
+              Publish to packages2.netdata.cloud: ${{ steps.package2-upload.outcome }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}

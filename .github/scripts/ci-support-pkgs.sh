@@ -1,14 +1,21 @@
 #!/bin/sh
 
 # This script installs supporting packages needed for CI, which provide following:
-# cron, pidof
+# curl, cron, pidof
 
 set -e
 
-if [ -f /etc/centos-release ] || [ -f /etc/redhat-release ] || [ -f /etc/fedora-release ] || [ -f /etc/almalinux-release ]; then
-    # Alma, Fedora, CentOS, Redhat
-    dnf install -y procps-ng cronie cronie-anacron || yum install -y procps-ng cronie cronie-anacron
-elif [ -f /etc/arch-release ]; then
-    # Arch
-    pacman -S --noconfirm cronie
-fi
+. /etc/os-release
+
+case "${ID}" in
+    amzn|almalinux|centos|fedora)
+        dnf install -y procps-ng cronie cronie-anacron curl || \
+        yum install -y procps-ng cronie cronie-anacron curl
+        ;;
+    arch)
+        pacman -S --noconfirm cronie curl
+        ;;
+    debian|ubuntu)
+        apt-get update && apt-get install -y cronie anacron curl
+        ;;
+esac

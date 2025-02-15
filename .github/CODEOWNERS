@@ -5,53 +5,48 @@
 * @Ferroin
 
 # Ownership by directory structure
-.travis/ @Ferroin
-.github/ @Ferroin
-aclk/ @stelfrag @underhood
-build/ @Ferroin
-contrib/debian @Ferroin
-collectors/ @vlvkobal
-collectors/ebpf.plugin/ @thiagoftsm @vlvkobal
-collectors/charts.d.plugin/ @ilyam8 @Ferroin
-collectors/freebsd.plugin/ @vlvkobal @thiagoftsm
-collectors/macos.plugin/ @vlvkobal @thiagoftsm
-collectors/python.d.plugin/ @ilyam8
-collectors/cups.plugin/ @simonnagl @vlvkobal @thiagoftsm
-exporting/  @vlvkobal @thiagoftsm
-daemon/ @thiagoftsm @vkalintiris
-database/ @thiagoftsm @vkalintiris
-docs/ @DShreve2
-health/ @thiagoftsm @vlvkobal @vkalintiris
-health/health.d/ @thiagoftsm @vlvkobal
-health/notifications/ @Ferroin @thiagoftsm
-ml/ @andrewm4894 @vkalintiris
-libnetdata/ @thiagoftsm @vkalintiris
-packaging/ @Ferroin
-registry/ @jacekkolasa
-streaming/ @thiagoftsm @vlvkobal
-system/ @Ferroin
-tests/ @Ferroin @vkalintiris
-web/ @thiagoftsm @vlvkobal @vkalintiris
-web/gui/ @jacekkolasa
+.github/ @netdata/agent-sre
+src/aclk/ @stelfrag
+src/collectors/ @thiagoftsm
+src/collectors/ebpf.plugin/ @thiagoftsm
+src/collectors/charts.d.plugin/ @ilyam8 @Ferroin
+src/collectors/freebsd.plugin/ @thiagoftsm
+src/collectors/macos.plugin/ @thiagoftsm
+src/collectors/python.d.plugin/ @ilyam8
+src/collectors/cups.plugin/ @thiagoftsm
+src/exporting/ @thiagoftsm
+src/daemon/ @thiagoftsm @vkalintiris
+src/database/ @thiagoftsm @vkalintiris
+docs/ @Ancairon
+src/go/ @ilyam8
+src/health/ @thiagoftsm @vkalintiris
+src/health/health.d/ @thiagoftsm
+src/health/notifications/ @Ferroin @thiagoftsm
+src/ml/ @vkalintiris
+src/libnetdata/ @thiagoftsm @vkalintiris
+packaging/ @netdata/agent-sre
+packaging/cmake @Ferroin @vkalintiris
+src/registry/ @novykh
+src/streaming/ @thiagoftsm
+system/ @netdata/agent-sre
+tests/ @netdata/agent-sre @vkalintiris
+src/web/ @thiagoftsm @vkalintiris
+src/web/gui/ @novykh
 
 # Ownership by filetype (overwrites ownership by directory)
-*.am @Ferroin
-*.md @DShreve2
-Dockerfile* @Ferroin
+*.md @Ancairon
+*.mdx @Ancairon
+Dockerfile* @netdata/agent-sre
 
 # Ownership of specific files
-.gitignore @Ferroin @vkalintiris
-.travis.yml @Ferroin
-.lgtm.yml @Ferroin
-.eslintrc @Ferroin
-.eslintignore @Ferroin
-.csslintrc @Ferroin
-.codeclimate.yml @Ferroin
-.codacy.yml @Ferroin
-.yamllint.yml @Ferroin
-netdata.spec.in @Ferroin
-netdata-installer.sh @Ferroin
-packaging/version @netdatabot @Ferroin
+.gitignore @netdata/agent-sre @vkalintiris
+.codacy.yml @netdata/agent-sre
+.yamllint.yml @netdata/agent-sre
+CMakeLists.txt @netdata/agent-sre @vkalintiris
+netdata.spec.in @netdata/agent-sre
+netdata-installer.sh @netdata/agent-sre
+packaging/version @netdatabot @netdata/agent-sre
+packaging/repoconfig/CMakelists.txt @netdata/agent-sre
 
-LICENSE.md @DShreve2 @Ferroin @vkalintiris
-CHANGELOG.md @netdatabot @Ferroin
+LICENSE.md @netdata/agent-sre @vkalintiris
+CHANGELOG.md @netdatabot @netdata/agent-sre

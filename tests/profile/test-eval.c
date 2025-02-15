@@ -10,7 +10,7 @@
 #include "config.h"
 #include "libnetdata/libnetdata.h"
 #include "libnetdata/required_dummies.h"
-#include "database/rrdcalc.h"
+#include "health/rrdcalc.h"
 
 /*
 void indent(int level, int show) {
@@ -231,7 +231,7 @@ NETDATA_DOUBLE evaluate(EVAL_NODE *op, int depth) {
 			break;
 
 		default:
-			error("I don't know how to handle operator '%c'", op->operator);
+			netdata_log_error("I don't know how to handle operator '%c'", op->operator);
 			r = 0;
 			break;
 	}

@@ -2,24 +2,25 @@
 
 set -e
 
-host="packages.netdata.cloud"
 user="netdatabot"
 
-distro="${1}"
-arch="${2}"
-format="${3}"
-repo="${4}"
+host="${1}"
+distro="${2}"
+arch="${3}"
+format="${4}"
+repo="${5}"
+pkg_src="${6:-./artifacts}"
 
 staging="${TMPDIR:-/tmp}/package-staging"
 prefix="/home/netdatabot/incoming/${repo}/"
 
-packages="$(find artifacts -name "*.${format}")"
+packages="$(find "${pkg_src}" -name "*.${format}")"
 
 mkdir -p "${staging}"
 
 case "${format}" in
     deb)
-        src="${staging}/$(echo "${distro}" | cut -f 1 -d '/')/pool/"
+        src="${staging}/${distro}"
         mkdir -p "${src}"
 
         for pkg in ${packages}; do

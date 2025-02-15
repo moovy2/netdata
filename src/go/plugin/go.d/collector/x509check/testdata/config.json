@@ -1,0 +1,12 @@
+{
+  "vnode": "ok",
+  "update_every": 123,
+  "source": "ok",
+  "timeout": 123.123,
+  "tls_ca": "ok",
+  "tls_cert": "ok",
+  "tls_key": "ok",
+  "tls_skip_verify": true,
+  "check_full_chain": true,
+  "check_revocation_status": true
+}

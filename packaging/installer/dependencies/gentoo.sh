@@ -8,30 +8,28 @@ NON_INTERACTIVE=0
 DONT_WAIT=0
 
 package_tree="
-  dev-vcs/git
-  sys-apps/findutils
-  sys-devel/gcc
-  sys-devel/make
-  sys-devel/autoconf
-  sys-devel/autoconf-archive
-  sys-devel/autogen
-  sys-devel/automake
-  virtual/pkgconfig
-  dev-util/cmake
-  app-arch/tar
-  net-misc/curl
-  app-arch/gzip
-  net-analyzer/netcat
-  sys-apps/util-linux
-  net-libs/libmnl
+  app-alternatives/gzip
+  app-alternatives/tar
+  app-arch/lz4
+  dev-lang/python
   dev-libs/json-c
   dev-libs/libuv
-  app-arch/lz4
+  dev-libs/libyaml
   dev-libs/openssl
+  dev-util/cmake
+  dev-vcs/git
+  net-libs/libmnl
+  net-misc/curl
+  sys-apps/findutils
+  sys-apps/util-linux
+  sys-devel/bison
+  sys-devel/flex
+  sys-devel/gcc
+  sys-devel/make
   virtual/libelf
-  dev-lang/python
-  dev-libs/libuv
+  virtual/pkgconfig
   "
+
 usage() {
   cat << EOF
 OPTIONS:

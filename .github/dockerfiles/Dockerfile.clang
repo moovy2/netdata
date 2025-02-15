@@ -1,4 +1,4 @@
-FROM debian:buster AS build
+FROM debian:12 AS build
 
 # Disable apt/dpkg interactive mode
 ENV DEBIAN_FRONTEND=noninteractive
@@ -9,10 +9,11 @@ RUN /tmp/install-required-packages.sh --dont-wait --non-interactive netdata-all
 
 # Install Clang and set as default CC
 RUN apt-get install -y clang && \
-    update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100
+    update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100 && \
+    update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100
 
 WORKDIR /netdata
 COPY . .
 
 # Build Netdata
-RUN ./netdata-installer.sh --dont-wait --dont-start-it --disable-go --require-cloud
+RUN ./netdata-installer.sh --dont-wait --dont-start-it --disable-go

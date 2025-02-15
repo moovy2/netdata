@@ -1,0 +1,11 @@
+{
+  "vnode": "ok",
+  "update_every": 123,
+  "address": "ok",
+  "timeout": 123.123,
+  "use_tls": true,
+  "tls_ca": "ok",
+  "tls_cert": "ok",
+  "tls_key": "ok",
+  "tls_skip_verify": true
+}

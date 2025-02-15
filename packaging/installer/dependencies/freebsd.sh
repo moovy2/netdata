@@ -8,23 +8,20 @@ NON_INTERACTIVE=0
 DONT_WAIT=0
 
 package_tree="
-  git
-  autoconf
-  autoconf-archive
-  autogen
-  automake
-  libtool
-  pkgconf
+  bison
   cmake
   curl
-  gzip
-  netcat
-  lzlib
   e2fsprogs-libuuid
+  flex
+  git
+  gzip
   json-c
-  libuv
   liblz4
+  libuv
+  libyaml
+  lzlib
   openssl
+  pkgconf
   python3
   "
 

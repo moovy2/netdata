@@ -9,6 +9,7 @@ check_successful_update() {
   (
     netdata_version=$(netdata -v | awk '{print $2}')
     updater_version=$(cat packaging/version)
+    echo "Version: netdata '$netdata_version', updater '$updater_version'"
     if [ "$netdata_version" = "$updater_version" ]; then
       echo "Update successful!"
     else
@@ -41,7 +42,7 @@ _main() {
     fi
   done
 
-  echo "🎉 All Done!"
+  echo "All Done!"
 }
 
 if [ -n "$0" ] && [ x"$0" != x"-bash" ]; then

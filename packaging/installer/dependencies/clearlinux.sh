@@ -8,22 +8,26 @@ NON_INTERACTIVE=0
 DONT_WAIT=0
 
 declare -a package_tree=(
+  bison
   c-basic
-  make
-  sysadmin-basic
-  devpkg-zlib
-  devpkg-util-linux
-  devpkg-libmnl
+  curl
+  devpkg-elfutils
   devpkg-json-c
+  devpkg-libmnl
   devpkg-libuv
   devpkg-lz4
   devpkg-openssl
-  devpkg-elfutils
-  git
+  devpkg-util-linux
+  devpkg-zlib
   findutils
-  curl
+  flex
+  git
   gzip
+  make
   python3-basic
+  service-os-dev
+  sysadmin-basic
+  yaml-dev
 )
 
 usage() {

@@ -8,30 +8,27 @@ NON_INTERACTIVE=0
 DONT_WAIT=0
 
 declare -a package_tree=(
-  gcc
-  make
-  autoconf
-  autoconf-archive
-  autogen
-  automake
-  libtool
-  cmake
-  gnu-netcat
-  zlib
-  util-linux
-  libmnl
-  json-c
-  libuv
-  lz4
-  openssl
-  libelf
-  git
-  pkgconfig
-  tar
-  curl
-  gzip
-  python3
   binutils
+  bison
+  cmake
+  curl
+  flex
+  gcc
+  git
+  gzip
+  json-c
+  libelf
+  libmnl
+  libuv
+  libyaml
+  lz4
+  make
+  openssl
+  pkgconfig
+  python3
+  tar
+  util-linux
+  zlib
 )
 
 usage() {
